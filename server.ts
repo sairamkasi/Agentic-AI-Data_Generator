@@ -64,6 +64,15 @@ const ai = new GoogleGenAI({
   }
 });
 
+// Helper to strip markdown formatting wrappers from JSON text safely
+function cleanJsonString(raw: string): string {
+  let clean = raw.trim();
+  if (clean.startsWith("```")) {
+    clean = clean.replace(/^```json\s*/i, "").replace(/```$/, "").trim();
+  }
+  return clean;
+}
+
 // Clean fetch URL utility
 async function fetchCleanWebText(url: string): Promise<string> {
   try {
@@ -111,44 +120,32 @@ async function fetchCleanWebText(url: string): Promise<string> {
 }
 
 async function generateWithRetry(prompt: string, schema: any) {
-    const MAX_RETRIES = 5;
+  const MAX_RETRIES = 5;
 
-    for (let retry = 0; retry < MAX_RETRIES; retry++) {
-
-        try {
-
-            return await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: prompt,
-                config: {
-                    responseMimeType: "application/json",
-                    responseSchema: schema,
-                    temperature: 0.85,
-                    systemInstruction:
-                        "You are a specialized agentic training data generator."
-                }
-            });
-
-        } catch (err: any) {
-
-            if (err.status === 503) {
-
-                const delay = Math.pow(2, retry) * 2000;
-
-                console.log(
-                    `Gemini busy...Retry ${retry + 1}/${MAX_RETRIES} in ${delay / 1000}s`
-                );
-
-                await new Promise(resolve => setTimeout(resolve, delay));
-
-                continue;
-            }
-
-            throw err;
+  for (let retry = 0; retry < MAX_RETRIES; retry++) {
+    try {
+      return await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: schema,
+          temperature: 0.85,
+          systemInstruction: "You are a specialized agentic training data generator. Output perfectly structured training sets without any external conversational wrapper."
         }
+      });
+    } catch (err: any) {
+      // Retry on transient 503 Service Unavailable or 429 Rate Limits
+      if (err.status === 503 || err.status === 429) {
+        const delay = Math.pow(2, retry) * 2000;
+        console.log(`Gemini busy/limited... Retry ${retry + 1}/${MAX_RETRIES} in ${delay / 1000}s`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      throw err;
     }
-
-    throw new Error("Gemini unavailable after maximum retries.");
+  }
+  throw new Error("Gemini unavailable after maximum retries.");
 }
 
 // Background Worker for Agentic Pipeline
@@ -193,7 +190,7 @@ async function runAgentPipeline(jobId: string) {
       } catch (searchError) {
         console.error("Search Grounding Failed, falling back to fully synthetic extraction context", searchError);
       }
-    } else if (job.sourceType === 'urls') {
+    } else if (job.sourceType === 'urls' && job.customUrls) {
       job.customUrls.forEach((url, i) => {
         activeSources.push({ url, title: `Custom Provided Link ${i + 1}` });
       });
@@ -218,7 +215,6 @@ async function runAgentPipeline(jobId: string) {
         }
         loadedSources.push(src);
 
-        // Update progress through loading sources
         const fetchProgress = 15 + Math.floor((i / activeSources.length) * 15);
         updateJobState(jobId, { progress: fetchProgress, sources: loadedSources });
       }
@@ -232,7 +228,6 @@ async function runAgentPipeline(jobId: string) {
     const targetQty = job.quantity;
     const generatedData: any[] = [];
 
-    // Dynamically build Gemini Response Schema based on custom researcher fields
     const propertiesObj: Record<string, any> = {};
     schema.forEach((field) => {
       let geminiType = Type.STRING;
@@ -263,7 +258,6 @@ async function runAgentPipeline(jobId: string) {
       required: ["entries"]
     };
 
-    // Calculate batches (e.g. 10 items per batch to avoid prompt timeouts)
     const batchSize = Math.min(10, targetQty);
     const totalBatches = Math.ceil(targetQty / batchSize);
 
@@ -273,7 +267,6 @@ async function runAgentPipeline(jobId: string) {
 
       console.log(`[Job ${jobId}] Generating batch ${batch}/${totalBatches} with ${currentBatchQty} entries`);
 
-      // Refined domain prompt instructions
       const prompt = `
         You are a highly capable dataset engineer training a state-of-the-art AI agent in the domain of: "${job.domain}".
         The task type is: "${job.taskType}".
@@ -295,35 +288,26 @@ async function runAgentPipeline(jobId: string) {
       `;
 
       try {
-        const generationResponse = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: geminiResponseSchema,
-            temperature: 0.85,
-            systemInstruction: "You are a specialized agentic training data generator. Output perfectly structured training sets without any external conversational wrapper."
-          }
-        });
-
+        // Utilizing the reliable exponential backoff logic
+        const generationResponse = await generateWithRetry(prompt, geminiResponseSchema);
         const rawResult = generationResponse.text;
+
         if (rawResult) {
-          const parsedResult = JSON.parse(rawResult);
+          const cleanedJson = cleanJsonString(rawResult);
+          const parsedResult = JSON.parse(cleanedJson);
+          
           if (parsedResult.entries && Array.isArray(parsedResult.entries)) {
             generatedData.push(...parsedResult.entries);
             
-            // Normalize & validate the schema on the server side
             const cleanedData = generatedData.map((entry) => {
               const cleaned: Record<string, any> = {};
               schema.forEach((f) => {
                 let val = entry[f.fieldName];
                 if (val === undefined || val === null) {
-                  // Fallbacks
                   if (f.fieldType === 'number') val = 0;
                   else if (f.fieldType === 'boolean') val = false;
                   else val = "";
                 }
-                // Coerce types to be absolutely certain
                 if (f.fieldType === 'number') {
                   cleaned[f.fieldName] = Number(val) || 0;
                 } else if (f.fieldType === 'boolean') {
@@ -344,14 +328,12 @@ async function runAgentPipeline(jobId: string) {
         }
       } catch (batchErr: any) {
         console.error(`[Job ${jobId}] Error in batch ${batch}`, batchErr);
-        // We will retry once or continue to avoid failing the whole job if we already have partial data
         if (generatedData.length === 0) {
           throw new Error(`Data generation failed at batch ${batch}: ${batchErr.message || batchErr}`);
         }
       }
     }
 
-    // Wrap up job
     updateJobState(jobId, {
       status: 'completed',
       progress: 100
@@ -386,7 +368,7 @@ app.post("/api/jobs", (req, res) => {
     schema,
     sourceType,
     customUrls: customUrls || [],
-    quantity: Math.min(200, Math.max(1, Number(quantity) || 10)), // safe range
+    quantity: Math.min(200, Math.max(1, Number(quantity) || 10)),
     status: 'pending',
     progress: 0,
     sources: [],
@@ -398,7 +380,6 @@ app.post("/api/jobs", (req, res) => {
   jobs.unshift(newJob);
   writeJobs(jobs);
 
-  // Trigger background job without blocking HTTP thread
   runAgentPipeline(newJob.id);
 
   res.status(201).json(newJob);
@@ -427,6 +408,14 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // Global fallback JSON Error Boundary Middleware
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("Global Express Exception:", err);
+    res.status(500).json({ 
+      error: err.message || "An internal application error occurred." 
+    });
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
