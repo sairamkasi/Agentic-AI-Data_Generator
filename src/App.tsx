@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { DatasetJob, SchemaField } from "../api/types";
-import { Plus, Trash2, Cpu, RefreshCw, Layers, Database, Globe, Download, CheckCircle, AlertTriangle, Loader2 } from "lucide-react";
+import { Plus, Trash2, Cpu, RefreshCw, Layers, Database, Globe, Download, AlertTriangle, Loader2 } from "lucide-react";
 
 export default function App() {
   const [jobs, setJobs] = useState<DatasetJob[]>([]);
