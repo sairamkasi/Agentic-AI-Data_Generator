@@ -1,6 +1,0 @@
-{
-  "name": "Agentic Training Data Generator",
-  "description": "An AI agent that searches external websites, fetches real-world content, normalizes raw text, and structures high-quality training datasets downloadable in JSON, CSV, PDF, and Excel formats.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

@@ -1,230 +1,259 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Sparkles, Cpu, Database, AlertCircle, RefreshCw, Layers } from 'lucide-react';
-import { DatasetJob, GenerateRequest } from './types';
-import DatasetConfigurator from './components/DatasetConfigurator';
-import DatasetWorkspace from './components/DatasetWorkspace';
-import JobList from './components/JobList';
+import React, { useState, useEffect } from "react";
+import { DatasetJob, SchemaField } from "../api/types";
+import { Plus, Trash2, Cpu, RefreshCw, Layers, Database, Globe, Download, CheckCircle, AlertTriangle, Loader2 } from "lucide-react";
 
 export default function App() {
   const [jobs, setJobs] = useState<DatasetJob[]>([]);
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  
+  // Form State
+  const [domain, setDomain] = useState("Python advanced decorators & metaprogramming");
+  const [taskType, setTaskType] = useState("Instruction Tuning");
+  const [quantity, setQuantity] = useState(10);
+  const [sourceType, setSourceType] = useState<'auto' | 'urls' | 'none'>('auto');
+  const [customUrls, setCustomUrls] = useState<string>("");
+  const [schema, setSchema] = useState<SchemaField[]>([
+    { fieldName: "instruction", fieldType: "string", description: "Complex user instruction asking for custom meta hooks." },
+    { fieldName: "code_solution", fieldType: "string", description: "Executable Python code resolving the prompt using wrappers." },
+    { fieldName: "is_valid_pattern", fieldType: "boolean", description: "Flags true if it avoids circular updates." }
+  ]);
 
-  // Fetch all jobs
-  const fetchJobs = useCallback(async () => {
+  // Temporary schema field additions
+  const [newFieldName, setNewFieldName] = useState("");
+  const [newFieldType, setNewFieldType] = useState<'string' | 'number' | 'boolean'>('string');
+  const [newFieldDesc, setNewFieldDesc] = useState("");
+
+  const fetchJobs = async () => {
     try {
-      const res = await fetch('/api/jobs');
-      if (!res.ok) throw new Error('Failed to retrieve jobs history.');
+      const res = await fetch("/api/jobs");
       const data = await res.json();
-      setJobs(data);
-      
-      // If there's no selected job, select the first completed or active one
-      if (data.length > 0 && !selectedJobId) {
-        setSelectedJobId(data[0].id);
-      }
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Server connection issue.');
-    }
-  }, [selectedJobId]);
+      if (Array.isArray(data)) setJobs(data);
+    } catch (e) { console.error(e); }
+  };
 
-  // Initial load
   useEffect(() => {
     fetchJobs();
-  }, [fetchJobs]);
-
-  // Smart Polling: Poll only when there is an active running job
-  useEffect(() => {
-    const hasActiveJob = jobs.some(j => 
-      ['pending', 'searching', 'fetching', 'normalizing'].includes(j.status)
-    );
-
-    if (!hasActiveJob) return;
-
-    const interval = setInterval(() => {
-      fetchJobs();
-    }, 2500);
-
+    const interval = setInterval(fetchJobs, 4000);
     return () => clearInterval(interval);
-  }, [jobs, fetchJobs]);
+  }, []);
 
-  // Submit new dataset generation request
-  const handleCreateDataset = async (request: GenerateRequest) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/jobs', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(request),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Failed to submit dataset task.');
-      }
-
-      const newJob = await res.json();
-      setJobs(prev => [newJob, ...prev]);
-      setSelectedJobId(newJob.id);
-    } catch (err: any) {
-      setError(err.message || 'An error occurred during task initiation.');
-    } finally {
-      setIsLoading(false);
-    }
+  const addSchemaField = () => {
+    if (!newFieldName.trim()) return;
+    setSchema([...schema, { fieldName: newFieldName.replace(/\s+/g, '_'), fieldType: newFieldType, description: newFieldDesc }]);
+    setNewFieldName(""); setNewFieldDesc("");
   };
 
-  // Delete a job
-  const handleDeleteJob = async (id: string) => {
-    try {
-      const res = await fetch(`/api/jobs/${id}`, {
-        method: 'DELETE',
-      });
-      if (res.ok) {
-        setJobs(prev => prev.filter(j => j.id !== id));
-        if (selectedJobId === id) {
-          setSelectedJobId(null);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to delete dataset job', err);
-    }
+  const removeSchemaField = (idx: number) => {
+    setSchema(schema.filter((_, i) => i !== idx));
   };
 
-  const selectedJob = jobs.find(j => j.id === selectedJobId);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const res = await fetch("/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          domain, taskType, quantity, sourceType,
+          schema, customUrls: customUrls.split("\n").filter(u => u.trim().startsWith("http"))
+        })
+      });
+      if (res.ok) fetchJobs();
+    } catch (err) { console.error(err); }
+    setLoading(false);
+  };
+
+  const deleteJob = async (id: string) => {
+    await fetch(`/api/jobs/${id}`, { method: "DELETE" });
+    fetchJobs();
+  };
+
+  const downloadDataset = (job: DatasetJob) => {
+    const blob = new Blob([JSON.stringify(job.data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${job.domain.toLowerCase().replace(/[^a-z0-x0-9]/g, "_")}_dataset.json`;
+    a.click();
+  };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col antialiased">
-      {/* Premium Header */}
-      <header className="print:hidden bg-slate-900 border-b border-slate-800 py-4 px-6 sticky top-0 z-50 shadow-md">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-emerald-950/60 border border-emerald-900/50 rounded-xl">
-              <Cpu className="w-6 h-6 text-emerald-400" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg font-sans font-medium text-white tracking-tight">Agentic Training Data Generator</h1>
-                <span className="text-[10px] bg-slate-800 text-slate-300 font-mono font-bold px-1.5 py-0.5 rounded border border-slate-700">v1.1</span>
-              </div>
-              <p className="text-xs text-slate-400 font-sans mt-0.5">
-                AI researchers' gateway to custom structured crawling, grounding, and domain-targeted datasets
-              </p>
-            </div>
+    <div className="min-h-screen bg-[#090d16] text-gray-100 p-6 font-sans">
+      {/* Header Panel */}
+      <header className="max-w-7xl mx-auto flex justify-between items-center pb-6 border-b border-gray-800 mb-8">
+        <div className="flex items-center gap-3">
+          <div className="bg-emerald-600 p-2.5 rounded-xl text-white shadow-lg shadow-emerald-900/30">
+            <Cpu className="w-6 h-6" />
           </div>
-          
-          <div className="flex items-center gap-3">
-            <button
-              onClick={fetchJobs}
-              className="p-2 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition-all"
-              title="Refresh job registry"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-            <div className="flex items-center gap-2 text-xs font-sans bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-slate-300">
-              <Database className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Storage Status: <strong>Online</strong></span>
-            </div>
+          <div>
+            <h1 className="text-xl font-bold tracking-tight">Agentic Training Data Generator <span className="text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-700 text-emerald-400 ml-2 font-mono">v1.1</span></h1>
+            <p className="text-xs text-gray-400">Structured Deep-Crawling Grounding Framework Engine Workspace</p>
           </div>
         </div>
+        <button onClick={fetchJobs} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-900 border border-gray-800 text-sm hover:bg-gray-800 text-gray-300">
+          <RefreshCw className="w-4 h-4" /> Sync Core Status
+        </button>
       </header>
 
-      {/* Main Container */}
-      <main className="max-w-7xl mx-auto px-6 py-8 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 w-full">
-        {/* Error notification */}
-        {error && (
-          <div className="print:hidden lg:col-span-12 bg-rose-950/20 border border-rose-900/30 p-4 rounded-xl flex items-start gap-3 text-sm text-rose-400">
-            <AlertCircle className="w-5 h-5 flex-shrink-0" />
-            <div className="flex-1">
-              <p className="font-semibold">Pipeline Execution Warning</p>
-              <p className="text-xs text-rose-500 mt-1">{error}</p>
-            </div>
-            <button onClick={() => setError(null)} className="text-xs text-slate-500 hover:text-white">Dismiss</button>
-          </div>
-        )}
+      <main className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
+        {/* Left Input Configuration Column */}
+        <section className="lg:col-span-5 space-y-6">
+          <div className="bg-[#0f1626] border border-gray-800 rounded-2xl p-6 shadow-xl">
+            <h2 className="text-md font-semibold mb-4 flex items-center gap-2 text-emerald-400 border-b border-gray-800 pb-2">
+              <Layers className="w-4 h-4" /> Setup Configuration Specs
+            </h2>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs text-gray-400 font-medium uppercase tracking-wider mb-1">Target Topic Domain</label>
+                <input value={domain} onChange={e => setDomain(e.target.value)} className="w-full bg-[#070b12] border border-gray-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-600 text-gray-200" required />
+              </div>
 
-        {/* Left Side: Setup & Registry (4 columns) */}
-        <section className="print:hidden lg:col-span-4 space-y-6">
-          <DatasetConfigurator onSubmit={handleCreateDataset} isLoading={isLoading} />
-          <JobList 
-            jobs={jobs} 
-            selectedJobId={selectedJobId} 
-            onSelectJob={setSelectedJobId} 
-            onDeleteJob={handleDeleteJob} 
-          />
-        </section>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-400 font-medium uppercase tracking-wider mb-1">Task Pipeline Structure</label>
+                  <input value={taskType} onChange={e => setTaskType(e.target.value)} className="w-full bg-[#070b12] border border-gray-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-600 text-gray-200" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 font-medium uppercase tracking-wider mb-1">Sample Vol Target Quantity</label>
+                  <input type="number" min="1" max="100" value={quantity} onChange={e => setQuantity(Number(e.target.value))} className="w-full bg-[#070b12] border border-gray-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-600 text-gray-200" />
+                </div>
+              </div>
 
-        {/* Right Side: Active Workspace (8 columns) */}
-        <section className="lg:col-span-8 flex flex-col h-full">
-          {selectedJob ? (
-            <div className="flex-1 space-y-6">
-              {/* If job is running, show an active processing screen */}
-              {['pending', 'searching', 'fetching', 'normalizing'].includes(selectedJob.status) && (
-                <div className="print:hidden bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center space-y-4 shadow-xl">
-                  <div className="relative w-16 h-16 mx-auto flex items-center justify-center bg-emerald-950/50 border border-emerald-900/40 rounded-full">
-                    <Sparkles className="w-8 h-8 text-emerald-400 animate-pulse" />
-                    <div className="absolute inset-0 rounded-full border-2 border-emerald-400 border-t-transparent animate-spin" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-sans font-medium text-white tracking-tight">Agentic Pipeline Active</h2>
-                    <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-                      The crawler agent is executing search grounding, downloading external reference websites, and structuring training inputs matching your schema.
-                    </p>
-                  </div>
+              <div>
+                <label className="block text-xs text-gray-400 font-medium uppercase tracking-wider mb-1">Source Crawling Discovery Option</label>
+                <select value={sourceType} onChange={e => setSourceType(e.target.value as any)} className="w-full bg-[#070b12] border border-gray-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-600 text-gray-200">
+                  <option value="auto">Google Autonomous Search Discovery Grounding</option>
+                  <option value="urls">Explicit Targeted Blueprint Url Seeds</option>
+                  <option value="none">Pure Synthetic Generation Model</option>
+                </select>
+              </div>
 
-                  <div className="max-w-md mx-auto bg-slate-950 border border-slate-800 p-4 rounded-xl text-left space-y-2">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-slate-400">Pipeline Progress</span>
-                      <span className="text-emerald-400 font-bold">{selectedJob.progress}%</span>
-                    </div>
-                    <div className="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
-                      <div className="bg-emerald-400 h-full transition-all duration-300" style={{ width: `${selectedJob.progress}%` }} />
-                    </div>
-                    <div className="flex items-center gap-2 mt-2">
-                      <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" />
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        Stage: {selectedJob.status.toUpperCase()} ({selectedJob.data.length} compiled)
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Partial Preview */}
-                  {selectedJob.data.length > 0 && (
-                    <div className="text-left border-t border-slate-800/80 pt-6">
-                      <div className="flex items-center gap-2 mb-3">
-                        <Layers className="w-4 h-4 text-emerald-400" />
-                        <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Partial Dataset Preview</h3>
-                      </div>
-                      <DatasetWorkspace job={selectedJob} />
-                    </div>
-                  )}
+              {sourceType === 'urls' && (
+                <div>
+                  <label className="block text-xs text-gray-400 font-medium uppercase tracking-wider mb-1">Custom Target Seed URLs (One per line)</label>
+                  <textarea rows={3} value={customUrls} onChange={e => setCustomUrls(e.target.value)} placeholder="[https://example.com/docs](https://example.com/docs)" className="w-full bg-[#070b12] border border-gray-800 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-600 text-gray-200" />
                 </div>
               )}
 
-              {/* Completed or failed workspace */}
-              {['completed', 'failed'].includes(selectedJob.status) && (
-                <DatasetWorkspace job={selectedJob} />
-              )}
+              {/* Advanced Custom Schema Builder */}
+              <div className="pt-2">
+                <label className="block text-xs text-gray-400 font-medium uppercase tracking-wider mb-2">Target Data Structural Schema Fields</label>
+                <div className="space-y-2 max-h-44 overflow-y-auto mb-3 pr-1">
+                  {schema.map((f, idx) => (
+                    <div key={idx} className="flex justify-between items-center bg-[#070b12] border border-gray-800 px-3 py-2 rounded-lg text-xs">
+                      <div>
+                        <span className="font-mono text-emerald-400 font-semibold">{f.fieldName}</span> 
+                        <span className="text-gray-500 ml-1">({f.fieldType})</span>
+                        <p className="text-gray-400 text-[11px] truncate max-w-xs">{f.description}</p>
+                      </div>
+                      <button type="button" onClick={() => removeSchemaField(idx)} className="text-red-400 hover:text-red-300">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Insertion row */}
+                <div className="bg-[#070b12] border border-gray-800 p-3 rounded-xl space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <input placeholder="field_name" value={newFieldName} onChange={e => setNewFieldName(e.target.value)} className="bg-[#0f1626] border border-gray-800 text-xs rounded px-2 py-1 text-gray-200" />
+                    <select value={newFieldType} onChange={e => setNewFieldType(e.target.value as any)} className="bg-[#0f1626] border border-gray-800 text-xs rounded px-2 py-1 text-gray-200">
+                      <option value="string">String</option>
+                      <option value="number">Number</option>
+                      <option value="boolean">Boolean</option>
+                    </select>
+                  </div>
+                  <div className="flex gap-2">
+                    <input placeholder="Field purpose summary rule..." value={newFieldDesc} onChange={e => setNewFieldDesc(e.target.value)} className="flex-1 bg-[#0f1626] border border-gray-800 text-xs rounded px-2 py-1 text-gray-200" />
+                    <button type="button" onClick={addSchemaField} className="bg-gray-800 text-gray-200 text-xs px-2.5 rounded hover:bg-gray-700 flex items-center gap-1">
+                      <Plus className="w-3.5 h-3.5" /> Include
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <button type="submit" disabled={loading || schema.length === 0} className="w-full py-2.5 mt-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-800 disabled:text-gray-500 text-white font-medium rounded-xl text-sm transition shadow-lg flex justify-center items-center gap-2">
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />} Dispatch Generation Stream Pipeline
+              </button>
+            </form>
+          </div>
+        </section>
+
+        {/* Right Job Pipelines List Column */}
+        <section className="lg:col-span-7 space-y-4">
+          <h2 className="text-md font-semibold tracking-wide text-gray-300 flex items-center gap-2">
+            <Globe className="w-4 h-4 text-sky-400" /> Monitored Real-time Generation Pools ({jobs.length})
+          </h2>
+
+          {jobs.length === 0 ? (
+            <div className="text-center py-16 bg-[#0f1626] rounded-2xl border border-gray-800 text-gray-500 text-sm">
+              No dataset pipelines launched yet. Use the setup config panel to dispatch your first model run state.
             </div>
           ) : (
-            <div className="print:hidden flex-1 flex flex-col items-center justify-center border border-slate-800 bg-slate-900/30 rounded-2xl p-12 text-center h-[500px]">
-              <Cpu className="w-12 h-12 text-slate-600 mb-4 animate-bounce" />
-              <h2 className="text-base font-sans font-medium text-slate-300">No Dataset Active</h2>
-              <p className="text-xs text-slate-500 mt-1 max-w-sm">
-                Initiate a new grounding job on the left configurator or select a compiled dataset from history to begin.
-              </p>
-            </div>
+            jobs.map((job) => (
+              <div key={job.id} className="bg-[#0f1626] border border-gray-800 rounded-2xl p-5 space-y-3 relative overflow-hidden shadow-md">
+                
+                {/* Status Top Banner Strip */}
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-200 flex items-center gap-2">{job.domain}</h3>
+                    <p className="text-xs text-gray-400 mt-0.5">Pipeline Identity ID: <span className="font-mono text-gray-300 text-[11px]">{job.id}</span> • Architecture Type: {job.taskType}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium uppercase tracking-wider ${
+                      job.status === 'completed' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' :
+                      job.status === 'failed' ? 'bg-red-950 text-red-400 border border-red-900' :
+                      'bg-sky-950 text-sky-400 border border-sky-800 animate-pulse'
+                    }`}>{job.status}</span>
+                    <button onClick={() => deleteJob(job.id)} className="text-gray-500 hover:text-red-400 p-1">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Progress Metric Status bar */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px] text-gray-400">
+                    <span>Pipeline Step: {job.status.toUpperCase()}</span>
+                    <span>{job.progress}%</span>
+                  </div>
+                  <div className="w-full bg-[#070b12] rounded-full h-2 overflow-hidden border border-gray-800">
+                    <div className={`h-full transition-all duration-500 rounded-full ${job.status === 'failed' ? 'bg-red-600' : job.status === 'completed' ? 'bg-emerald-500' : 'bg-sky-500'}`} style={{ width: `${job.progress}%` }} />
+                  </div>
+                </div>
+
+                {/* Sub logs metadata display metrics block */}
+                <div className="bg-[#070b12] border border-gray-900 rounded-xl p-3 text-xs space-y-1.5">
+                  <div className="flex justify-between text-gray-400">
+                    <span>Discovered Context Sources Found:</span>
+                    <span className="font-mono text-gray-200">{job.sources?.length || 0} tracks</span>
+                  </div>
+                  <div className="flex justify-between text-gray-400">
+                    <span>Generated Valid Matrix Records:</span>
+                    <span className="font-mono text-emerald-400 font-bold">{job.data?.length || 0} / {job.quantity} instances</span>
+                  </div>
+                  {job.error && (
+                    <div className="flex gap-1.5 items-start text-red-400 border-t border-red-950/50 pt-1.5 mt-1">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <p className="text-[11px] font-mono break-all">{job.error}</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Operational Execution actions bar row */}
+                {job.status === 'completed' && job.data?.length > 0 && (
+                  <div className="flex justify-end pt-1">
+                    <button onClick={() => downloadDataset(job)} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg shadow transition">
+                      <Download className="w-3.5 h-3.5" /> Export Structured Matrix Asset Dataset (.JSON)
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))
           )}
         </section>
       </main>
-
-      {/* Footer */}
-      <footer className="print:hidden border-t border-slate-900 bg-slate-950 py-4 text-center text-[11px] text-slate-500 font-mono mt-auto">
-        &copy; 2026 Agentic Training Data Generator • Pure State-of-the-Art Syntheses
-      </footer>
     </div>
   );
 }
