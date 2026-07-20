@@ -39,7 +39,7 @@ export default function App() {
 
   const addSchemaField = () => {
     if (!newFieldName.trim()) return;
-    setSchema([...schema, { fieldName: newFieldName.replace(/\s+/g, '_'), fieldType: newFieldType, description: newFieldDesc }]);
+    setSchema([...schema, { fieldName: newFieldName.trim().replace(/\s+/g, '_'), fieldType: newFieldType, description: newFieldDesc }]);
     setNewFieldName(""); setNewFieldDesc("");
   };
 
@@ -49,24 +49,39 @@ export default function App() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (schema.length === 0) return;
     setLoading(true);
+    
+    // Safely parse URL inputs line by line
+    const parsedUrls = customUrls
+      ? customUrls.split("\n").map(u => u.trim()).filter(u => u.startsWith("http"))
+      : [];
+
     try {
       const res = await fetch("/api/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          domain, taskType, quantity, sourceType,
-          schema, customUrls: customUrls.split("\n").filter(u => u.trim().startsWith("http"))
+          domain, 
+          taskType, 
+          quantity, 
+          sourceType,
+          schema, 
+          customUrls: parsedUrls
         })
       });
-      if (res.ok) fetchJobs();
+      if (res.ok) {
+        fetchJobs();
+      }
     } catch (err) { console.error(err); }
     setLoading(false);
   };
 
   const deleteJob = async (id: string) => {
-    await fetch(`/api/jobs/${id}`, { method: "DELETE" });
-    fetchJobs();
+    try {
+      await fetch(`/api/jobs/${id}`, { method: "DELETE" });
+      fetchJobs();
+    } catch (e) { console.error(e); }
   };
 
   const downloadDataset = (job: DatasetJob) => {
@@ -74,8 +89,10 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${job.domain.toLowerCase().replace(/[^a-z0-x0-9]/g, "_")}_dataset.json`;
+    // FIXED: Corrected the structural range bounds typo from '0-x' directly to '0-9'
+    a.download = `${job.domain.toLowerCase().replace(/[^a-z0-9]/g, "_")}_dataset.json`;
     a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -91,7 +108,7 @@ export default function App() {
             <p className="text-xs text-gray-400">Structured Deep-Crawling Grounding Framework Engine Workspace</p>
           </div>
         </div>
-        <button onClick={fetchJobs} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-900 border border-gray-800 text-sm hover:bg-gray-800 text-gray-300">
+        <button onClick={fetchJobs} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-900 border border-gray-800 text-sm hover:bg-gray-800 text-gray-300 transition">
           <RefreshCw className="w-4 h-4" /> Sync Core Status
         </button>
       </header>
@@ -132,7 +149,7 @@ export default function App() {
               {sourceType === 'urls' && (
                 <div>
                   <label className="block text-xs text-gray-400 font-medium uppercase tracking-wider mb-1">Custom Target Seed URLs (One per line)</label>
-                  <textarea rows={3} value={customUrls} onChange={e => setCustomUrls(e.target.value)} placeholder="[https://example.com/docs](https://example.com/docs)" className="w-full bg-[#070b12] border border-gray-800 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-600 text-gray-200" />
+                  <textarea rows={3} value={customUrls} onChange={e => setCustomUrls(e.target.value)} placeholder="https://example.com/docs" className="w-full bg-[#070b12] border border-gray-800 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-600 text-gray-200" />
                 </div>
               )}
 
@@ -147,7 +164,7 @@ export default function App() {
                         <span className="text-gray-500 ml-1">({f.fieldType})</span>
                         <p className="text-gray-400 text-[11px] truncate max-w-xs">{f.description}</p>
                       </div>
-                      <button type="button" onClick={() => removeSchemaField(idx)} className="text-red-400 hover:text-red-300">
+                      <button type="button" onClick={() => removeSchemaField(idx)} className="text-red-400 hover:text-red-300 transition">
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
@@ -157,16 +174,16 @@ export default function App() {
                 {/* Insertion row */}
                 <div className="bg-[#070b12] border border-gray-800 p-3 rounded-xl space-y-2">
                   <div className="grid grid-cols-2 gap-2">
-                    <input placeholder="field_name" value={newFieldName} onChange={e => setNewFieldName(e.target.value)} className="bg-[#0f1626] border border-gray-800 text-xs rounded px-2 py-1 text-gray-200" />
-                    <select value={newFieldType} onChange={e => setNewFieldType(e.target.value as any)} className="bg-[#0f1626] border border-gray-800 text-xs rounded px-2 py-1 text-gray-200">
+                    <input placeholder="field_name" value={newFieldName} onChange={e => setNewFieldName(e.target.value)} className="bg-[#0f1626] border border-gray-800 text-xs rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-gray-700" />
+                    <select value={newFieldType} onChange={e => setNewFieldType(e.target.value as any)} className="bg-[#0f1626] border border-gray-800 text-xs rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-gray-700">
                       <option value="string">String</option>
                       <option value="number">Number</option>
                       <option value="boolean">Boolean</option>
                     </select>
                   </div>
                   <div className="flex gap-2">
-                    <input placeholder="Field purpose summary rule..." value={newFieldDesc} onChange={e => setNewFieldDesc(e.target.value)} className="flex-1 bg-[#0f1626] border border-gray-800 text-xs rounded px-2 py-1 text-gray-200" />
-                    <button type="button" onClick={addSchemaField} className="bg-gray-800 text-gray-200 text-xs px-2.5 rounded hover:bg-gray-700 flex items-center gap-1">
+                    <input placeholder="Field purpose summary rule..." value={newFieldDesc} onChange={e => setNewFieldDesc(e.target.value)} className="flex-1 bg-[#0f1626] border border-gray-800 text-xs rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-gray-700" />
+                    <button type="button" onClick={addSchemaField} className="bg-gray-800 text-gray-200 text-xs px-2.5 rounded hover:bg-gray-700 flex items-center gap-1 transition">
                       <Plus className="w-3.5 h-3.5" /> Include
                     </button>
                   </div>
@@ -206,7 +223,7 @@ export default function App() {
                       job.status === 'failed' ? 'bg-red-950 text-red-400 border border-red-900' :
                       'bg-sky-950 text-sky-400 border border-sky-800 animate-pulse'
                     }`}>{job.status}</span>
-                    <button onClick={() => deleteJob(job.id)} className="text-gray-500 hover:text-red-400 p-1">
+                    <button onClick={() => deleteJob(job.id)} className="text-gray-500 hover:text-red-400 p-1 transition">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -242,7 +259,7 @@ export default function App() {
                 </div>
 
                 {/* Operational Execution actions bar row */}
-                {job.status === 'completed' && job.data?.length > 0 && (
+                {job.status === 'completed' && job.data && job.data.length > 0 && (
                   <div className="flex justify-end pt-1">
                     <button onClick={() => downloadDataset(job)} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg shadow transition">
                       <Download className="w-3.5 h-3.5" /> Export Structured Matrix Asset Dataset (.JSON)
