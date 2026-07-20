@@ -12,9 +12,9 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN || "",
 });
 
+// Correct production initialization for @google/genai v1.0.0+
 const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+  apiKey: process.env.GEMINI_API_KEY
 });
 
 function cleanJsonString(raw: string): string {
@@ -92,7 +92,7 @@ async function runAgentPipeline(jobId: string, job: DatasetJob) {
           model: "gemini-2.5-flash",
           contents: searchQuery,
           config: {
-            tools: [{ googleSearch: {} }],
+            tools: [{ googleSearch: {} }] as any,
             systemInstruction: "You are an expert training data crawler. Discover high-quality real-world documentation, repositories, articles, or resources to create domain-specific models."
           },
         });
@@ -157,7 +157,7 @@ async function runAgentPipeline(jobId: string, job: DatasetJob) {
       required: ["entries"]
     };
 
-    const batchSize = 5; // Smaller batch size to accommodate short Serverless window timeouts
+    const batchSize = 5; 
     const totalBatches = Math.ceil(job.quantity / batchSize);
     const generatedData: any[] = [];
 
@@ -231,15 +231,12 @@ app.post("/api/jobs", async (req, res) => {
     id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
     domain, taskType, schema, sourceType,
     customUrls: customUrls || [],
-    quantity: Math.min(30, Math.max(1, Number(quantity) || 5)), // Capped lower for quick serverless verification execution
+    quantity: Math.min(30, Math.max(1, Number(quantity) || 5)), 
     status: 'pending', progress: 0, sources: [], data: [], createdAt: new Date().toISOString()
   };
 
   await redis.set(`job:${newJob.id}`, JSON.stringify(newJob));
   
-  // Launch the generation pipeline execution
-  // Note: On Vercel Hobby serverless functions, execution ends when the response is sent.
-  // For a reliable multi-minute async pipeline, call runAgentPipeline via a separate Vercel Background Job / Edge Cron / Inngest worker.
   runAgentPipeline(newJob.id, newJob);
 
   res.status(201).json(newJob);
